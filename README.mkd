@@ -1,0 +1,113 @@
+PL/pgSQL coverage reporting
+===========================
+
+This contrib module can be used to get useful statement execution info for your stored PL/pgSQL functions from which you can extract for example statement and branch test coverage.
+
+
+Installation
+------------
+Extract the plpgsql_coverage directory to you postgresql sources contrib directory.
+
+Then run `make install`
+This will install plugin to your postgres server.
+
+
+Usage
+-----
+First you need to load plpgsql and the plugin, to do that execute following statements:
+
+    LOAD 'plpgsql';
+    LOAD 'plpgsql_coverage';
+
+Then enable the plugin by setting configuring table to which it should store it's data to:
+
+    SET plpgsql_coverage.stats_table_name = 'public.coverage';
+
+After this you can execute your PL/pgSQL functions and the execution stats will be stored in the table you specified above.
+The table structure is following:
+
+    CREATE TABLE public.coverage (
+        func_oid OID,     -- Oid of the function
+        line_number INT,  -- Line number of the statement
+        stmt_number INT,  -- "Id" of the statement within the function
+        stmt_type TEXT,   -- Human readable statement type
+        exec_count INT8,  -- Number of executions of given statement
+        stmt_parent INT,  -- Reference to parent statement "id" (to a block, IF, CASE and similar statements...)
+        stmt_branch INT   -- In which branch of the parent statement is this one located (when parent is IF or CASE)
+    );
+
+You can disable the plugin by unsetting the plpgsql_coverage.stats_table_name config variable:
+
+    SET plpgsql_coverage.stats_table_name = '';
+
+
+Examples of useful queries
+--------------------------
+All of these assume you are using *public.coverage* as a table name.
+
+Overview of executed source lines:
+
+    SELECT
+        fnoid,
+        ln,
+        src,
+        stmt_number,
+        stmt_type,
+        exec_count,
+        stmt_parent,
+        stmt_branch
+    FROM (
+        SELECT
+            regexp_split_to_table(prosrc, $$\n$$) AS src,
+            generate_series(1,array_upper(regexp_split_to_array(prosrc, $$\n$$) , 1)) AS ln,
+            oid AS fnoid
+        FROM
+            pg_proc
+        WHERE
+            oid IN (SELECT DISTINCT func_oid FROM public.coverage)
+        ) AS q
+    LEFT JOIN
+        public.coverage ON (func_oid = fnoid AND ln = line_number+1)
+    ORDER BY
+        fnoid, ln;
+
+
+Statement coverage percentage:
+
+    SELECT
+        (SELECT proname FROM pg_proc WHERE oid = func_oid) AS function_name,
+        count(*) AS statements, sum(least(exec_count, 1)) AS exec_statements,
+        to_char(100::numeric*sum(least(exec_count, 1))/greatest(count(*), 1), '990.9%') AS coverage
+    FROM
+        public.coverage
+    GROUP BY
+        func_oid;
+
+
+Branch coverage percentage:
+
+    SELECT
+        (SELECT proname FROM pg_proc WHERE oid = a.func_oid) AS function_name,
+        sum(a.branches) AS branches, count(b.exec_branches) AS exec_branches,
+        to_char(100::numeric*count(b.exec_branches)/greatest(sum(a.branches), 1), '990.9%') AS coverage
+    FROM (
+        SELECT func_oid, stmt_parent, count(*) AS branches
+        FROM (
+            SELECT func_oid, stmt_parent, stmt_branch
+            FROM public.coverage
+            GROUP BY func_oid, stmt_parent, stmt_branch
+        ) AS q
+        GROUP BY func_oid, stmt_parent
+    ) AS a
+    LEFT JOIN (
+        SELECT func_oid, stmt_parent, count(*) AS exec_branches
+        FROM (
+            SELECT DISTINCT ON (func_oid, stmt_parent, stmt_branch) func_oid, stmt_parent, stmt_branch, exec_count
+            FROM public.coverage
+            ORDER BY func_oid, stmt_parent, stmt_branch
+        ) AS q
+        GROUP BY func_oid, stmt_parent
+        HAVING sum(exec_count) > 0
+    ) AS b ON (a.func_oid = b.func_oid AND a.stmt_parent = b.stmt_parent)
+    GROUP BY a.func_oid;
+
