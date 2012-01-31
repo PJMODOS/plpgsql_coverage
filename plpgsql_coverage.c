@@ -3,6 +3,8 @@
 #include "plpgsql.h"
 #include "pgstat.h"
 #include "catalog/namespace.h"
+#include "utils/builtins.h"
+#include "catalog/pg_type.h"
 
 PG_MODULE_MAGIC;        /* Tell the server about our compile environment */
 
@@ -87,6 +89,9 @@ void _PG_init( void )
                                PGC_USERSET,
 #if PG_VERSION_NUM >= 80400
                                0,
+#endif
+#if PG_VERSION_NUM >= 90100
+                               NULL,
 #endif
                                NULL,
                                NULL );
@@ -215,7 +220,7 @@ static void walkStmtCase( PLpgSQL_execstate * estate, PLpgSQL_stmt_case * stmt )
     foreach(l, stmt->case_when_list)
     {
         PLpgSQL_case_when *cwt = (PLpgSQL_case_when *) lfirst(l);
-        walkStmtList(estate, (PLpgSQL_stmt *) cwt->stmts, getStmtStats(estate, (PLpgSQL_stmt *) stmt)->num, branch);
+        walkStmtList(estate, cwt->stmts, getStmtStats(estate, (PLpgSQL_stmt *) stmt)->num, branch);
         branch++;
     }
 
