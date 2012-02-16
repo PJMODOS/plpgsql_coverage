@@ -345,7 +345,7 @@ static void ensureStatsTable( void )
             "  stmt_branch INT "
             " );";
     const char  *createIndexString =
-            " CREATE UNIQUE INDEX coverage_uniq ON %s( func_oid, line_number );";
+            " CREATE UNIQUE INDEX coverage_uniq ON %s( func_oid, stmt_number );";
 
     relVar = makeRangeVarFromNameList(stringToQualifiedNameList(statsTableName));
 
