@@ -297,6 +297,9 @@ static void func_setup( PLpgSQL_execstate * estate, PLpgSQL_function * func )
     if (old_func_setup != NULL)
         old_func_setup(estate, func);
 
+    if (statsTableName == NULL)
+        return;
+    
     ctx->stmtCount = 0;
     estate->plugin_info = ctx;
     walkStmt(estate, (PLpgSQL_stmt *) func->action, 0, 0);
@@ -323,6 +326,9 @@ static void stmt_begin( PLpgSQL_execstate * estate, PLpgSQL_stmt * stmt )
 
     if (old_stmt_beg != NULL)
         old_stmt_beg(estate, stmt);
+
+    if (statsTableName == NULL)
+        return;
 
     stats = getStmtStats( estate, stmt );
     stats->execCount++;
