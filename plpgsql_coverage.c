@@ -29,6 +29,7 @@ static char * statsTableName = NULL;
 void _PG_fini( void );
 
 static void func_setup( PLpgSQL_execstate * estate, PLpgSQL_function * func );
+static void func_begin( PLpgSQL_execstate * estate, PLpgSQL_function * func );
 static void func_end( PLpgSQL_execstate * estate, PLpgSQL_function * func );
 static void stmt_begin( PLpgSQL_execstate * estate, PLpgSQL_stmt * stmt );
 
@@ -52,12 +53,13 @@ static void updateStats( PLpgSQL_execstate * estate, PLpgSQL_function * func );
 
 /* support for more plpgsql plugins */
 static void (*old_func_setup) ( PLpgSQL_execstate * estate, PLpgSQL_function * func);
+static void (*old_func_beg) ( PLpgSQL_execstate * estate, PLpgSQL_function * func);
 static void (*old_func_end) ( PLpgSQL_execstate * estate, PLpgSQL_function * func);
 static void (*old_stmt_beg) ( PLpgSQL_execstate *estate, PLpgSQL_stmt *stmt );
 
 static PLpgSQL_plugin plugin_funcs = {
     func_setup,
-    NULL,
+    func_begin,
     func_end,
     stmt_begin,
     NULL
@@ -71,6 +73,8 @@ void _PG_init( void )
     if ((*var_ptr) != NULL) {
         old_func_setup = (*var_ptr)->func_setup;
         (*var_ptr)->func_setup = func_setup;
+        old_func_beg = (*var_ptr)->func_beg;
+        (*var_ptr)->func_beg = func_begin;
         old_func_end = (*var_ptr)->func_end;
         (*var_ptr)->func_end = func_end;
         old_stmt_beg = (*var_ptr)->stmt_beg;
@@ -104,6 +108,7 @@ void _PG_fini( void )
 
     if (old_stmt_beg != NULL) {
         (*var_ptr)->func_setup = old_func_setup;
+        (*var_ptr)->func_beg = old_func_beg;
         (*var_ptr)->func_end = old_func_end;
         (*var_ptr)->stmt_beg = old_stmt_beg;
     } else {
@@ -303,6 +308,22 @@ static void func_setup( PLpgSQL_execstate * estate, PLpgSQL_function * func )
     ctx->stmtCount = 0;
     estate->plugin_info = ctx;
     walkStmt(estate, (PLpgSQL_stmt *) func->action, 0, 0);
+}
+
+/* Called on function execution start
+ * used for logging execution of the outermost BEGIN statement */
+static void func_begin( PLpgSQL_execstate * estate, PLpgSQL_function * func )
+{
+    StmtStats    * stats;
+
+    if (old_func_beg != NULL)
+        old_func_beg(estate, func);
+
+    if (statsTableName == NULL)
+        return;
+
+    stats = getStmtStats( estate, (PLpgSQL_stmt *) func->action );
+    stats->execCount++;
 }
 
 /* Called on function execution end
