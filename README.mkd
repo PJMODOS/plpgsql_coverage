@@ -14,10 +14,9 @@ This will install plugin to your postgres server.
 
 Usage
 -----
-First you need to load plpgsql and the plugin, to do that execute following statements:
+First you need to load the plugin, to do that execute following statement:
 
-    LOAD 'plpgsql';
-    LOAD 'plpgsql_coverage';
+    LOAD '$libdir/plugins/plpgsql_coverage';
 
 Then enable the plugin by setting configuring table to which it should store it's data to:
 

@@ -5,6 +5,7 @@
 #include "catalog/namespace.h"
 #include "utils/builtins.h"
 #include "catalog/pg_type.h"
+#include "miscadmin.h"
 
 PG_MODULE_MAGIC;        /* Tell the server about our compile environment */
 
@@ -50,6 +51,7 @@ static StmtStats * createStmtStats( PLpgSQL_execstate * estate, PLpgSQL_stmt * s
 /* Table updating */
 static void ensureStatsTable( void );
 static void updateStats( PLpgSQL_execstate * estate, PLpgSQL_function * func );
+static const char *coverage_stmt_typename(PLpgSQL_stmt *stmt);
 
 /* support for more plpgsql plugins */
 static void (*old_func_setup) ( PLpgSQL_execstate * estate, PLpgSQL_function * func);
@@ -372,7 +374,11 @@ static void ensureStatsTable( void )
             "  stmt_branch INT "
             " );";
     const char  *createIndexString =
-            " CREATE UNIQUE INDEX coverage_uniq ON %s( func_oid, stmt_number );";
+            " CREATE UNIQUE INDEX %s ON %s( func_oid, stmt_number );";
+
+    char *indexName = palloc(strlen(statsTableName) + 6);
+    strcpy(indexName, statsTableName);
+    strcat(indexName, "_uniq");
 
     relVar = makeRangeVarFromNameList(stringToQualifiedNameList(statsTableName));
 
@@ -384,8 +390,10 @@ static void ensureStatsTable( void )
     SPI_exec( cmd.data, 0 );
 
     initStringInfo( &cmd );
-    appendStringInfo( &cmd, createIndexString, statsTableName );
+    appendStringInfo( &cmd, createIndexString, quote_identifier(indexName), statsTableName );
     SPI_exec( cmd.data, 0 );
+
+    pfree(indexName);
 }
 
 
@@ -393,6 +401,8 @@ static void ensureStatsTable( void )
 static void updateStats( PLpgSQL_execstate * estate, PLpgSQL_function * func )
 {
     CoverageCtx * ctx = (CoverageCtx *) estate->plugin_info;
+    Oid rolid = GetCurrentRoleId();
+    bool is_superuser = superuser();
     int i;
     void *execPlan;
     Datum values[7];
@@ -404,6 +414,11 @@ static void updateStats( PLpgSQL_execstate * estate, PLpgSQL_function * func )
     char *selectStmt = "SELECT func_oid FROM %s WHERE func_oid = $1 LIMIT 1";
     char *stmt;
     bool exists;
+
+    SetCurrentRoleId(InvalidOid, false);
+
+    PG_TRY();
+    {
 
     // Make sure table exists
     ensureStatsTable();
@@ -447,10 +462,10 @@ static void updateStats( PLpgSQL_execstate * estate, PLpgSQL_function * func )
         StmtStats *stats = ctx->stmtStats[i];
         int spiResult;
 
-        size_t stmtTypeLen = strlen( plpgsql_stmt_typename(stats->stmt) );
+        size_t stmtTypeLen = strlen( coverage_stmt_typename(stats->stmt) );
         char * stmtType = palloc( VARHDRSZ + stmtTypeLen );
 
-        memcpy( VARDATA( stmtType ), plpgsql_stmt_typename(stats->stmt), stmtTypeLen );
+        memcpy( VARDATA( stmtType ), coverage_stmt_typename(stats->stmt), stmtTypeLen );
         SET_VARSIZE( stmtType , VARHDRSZ + stmtTypeLen );
 
         values[0] = ObjectIdGetDatum( func->fn_oid );
@@ -475,4 +490,85 @@ static void updateStats( PLpgSQL_execstate * estate, PLpgSQL_function * func )
 
     pfree( stmt );
     SPI_pfree( execPlan );
+
+    }
+    PG_CATCH();
+    {
+        SetCurrentRoleId(rolid, is_superuser);
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+
+    SetCurrentRoleId(rolid, is_superuser);
+}
+
+
+
+/*
+ * Statement type as a string, for use in error messages etc.
+ */
+static const char *
+coverage_stmt_typename(PLpgSQL_stmt *stmt)
+{
+#if PG_VERSION_NUM >= 80400
+	switch ((enum PLpgSQL_stmt_types) stmt->cmd_type)
+#else
+    switch (stmt->cmd_type)
+#endif
+	{
+		case PLPGSQL_STMT_BLOCK:
+			return _("statement block");
+		case PLPGSQL_STMT_ASSIGN:
+			return _("assignment");
+		case PLPGSQL_STMT_IF:
+			return "IF";
+#if PG_VERSION_NUM >= 80400
+		case PLPGSQL_STMT_CASE:
+			return "CASE";
+#endif
+		case PLPGSQL_STMT_LOOP:
+			return "LOOP";
+		case PLPGSQL_STMT_WHILE:
+			return "WHILE";
+		case PLPGSQL_STMT_FORI:
+			return _("FOR with integer loop variable");
+		case PLPGSQL_STMT_FORS:
+			return _("FOR over SELECT rows");
+#if PG_VERSION_NUM >= 80400
+		case PLPGSQL_STMT_FORC:
+			return _("FOR over cursor");
+#endif
+#if PG_VERSION_NUM >= 90200
+		case PLPGSQL_STMT_FOREACH_A:
+			return _("FOREACH over array");
+#endif
+		case PLPGSQL_STMT_EXIT:
+			return "EXIT";
+		case PLPGSQL_STMT_RETURN:
+			return "RETURN";
+		case PLPGSQL_STMT_RETURN_NEXT:
+			return "RETURN NEXT";
+		case PLPGSQL_STMT_RETURN_QUERY:
+			return "RETURN QUERY";
+		case PLPGSQL_STMT_RAISE:
+			return "RAISE";
+		case PLPGSQL_STMT_EXECSQL:
+			return _("SQL statement");
+		case PLPGSQL_STMT_DYNEXECUTE:
+			return _("EXECUTE statement");
+		case PLPGSQL_STMT_DYNFORS:
+			return _("FOR over EXECUTE statement");
+		case PLPGSQL_STMT_GETDIAG:
+			return "GET DIAGNOSTICS";
+		case PLPGSQL_STMT_OPEN:
+			return "OPEN";
+		case PLPGSQL_STMT_FETCH:
+			return "FETCH";
+		case PLPGSQL_STMT_CLOSE:
+			return "CLOSE";
+		case PLPGSQL_STMT_PERFORM:
+			return "PERFORM";
+	}
+
+	return "unknown";
 }
